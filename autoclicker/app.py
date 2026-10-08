@@ -6,7 +6,7 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 from . import APP_NAME
-from .clicker import Clicker, set_timer_resolution
+from .clicker import Clicker, optimize_process, release_process
 from .config import Config
 from .hotkeys import HotkeyManager
 from .ui.main_window import MainWindow
@@ -23,7 +23,7 @@ def main() -> int:
     app.setApplicationName(APP_NAME)
     app.setStyle("Fusion")
 
-    set_timer_resolution(True)
+    optimize_process()
     cfg = Config()
     clicker = Clicker()
     hotkeys = HotkeyManager()
@@ -32,7 +32,7 @@ def main() -> int:
     window.show()
 
     code = app.exec()
-    set_timer_resolution(False)
+    release_process()
     return code
 
 

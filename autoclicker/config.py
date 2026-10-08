@@ -38,6 +38,17 @@ DEFAULT_CLICK = {
     "x": 0,
     "y": 0,
     "start_delay_ms": 0,
+    "game_cap_cps": 0,          # teto de CPS aceito pelo jogo (0 = sem teto conhecido)
+}
+
+# Perfis prontos (somente leitura). O Cookie Clicker descarta cliques com menos de 20 ms
+# entre si (teto de 50 CPS); ~5 ms garante que o primeiro clique após os 20 ms sempre passe.
+BUILTIN_PROFILES = {
+    "★ Cookie Clicker (teto 50 CPS)": {
+        "hours": 0, "minutes": 0, "seconds": 0, "millis": 5, "jitter_ms": 0, "hold_ms": 0,
+        "click_type": 1, "button": "left", "mode": "toggle", "repeat_forever": True,
+        "position_mode": "cursor", "start_delay_ms": 0, "game_cap_cps": 50,
+    },
 }
 
 DEFAULT_APPEARANCE = {

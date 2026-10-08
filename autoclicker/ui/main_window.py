@@ -12,8 +12,8 @@ from PySide6.QtWidgets import (
 )
 
 from .. import APP_NAME
-from ..clicker import Clicker, cursor_pos
-from ..config import DEFAULT_HOTKEYS, HOTKEY_LABELS, Config, config_dir
+from ..clicker import OPT_STATUS, Clicker, cursor_pos
+from ..config import BUILTIN_PROFILES, DEFAULT_HOTKEYS, HOTKEY_LABELS, Config, config_dir
 from ..hotkeys import HotkeyManager
 from ..keys import pretty_combo
 from .theme import ACCENT_PRESETS, build_qss, make_icon
@@ -79,6 +79,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self._build_clicker_page())
         self.stack.addWidget(self._build_hotkeys_page())
         self.stack.addWidget(self._build_appearance_page())
+        self.stack.addWidget(self._build_diagnostics_page())
         middle.addWidget(self.stack, 1)
         outer.addWidget(self._build_bottom_bar())
 
@@ -108,7 +109,7 @@ class MainWindow(QMainWindow):
         lay.addSpacing(10)
         self.nav = QListWidget()
         self.nav.setObjectName("nav")
-        for name in ("Clicker", "Atalhos", "Aparência"):
+        for name in ("Clicker", "Atalhos", "Aparência", "Diagnóstico"):
             self.nav.addItem(name)
         self.nav.setCurrentRow(0)
         self.nav.currentRowChanged.connect(lambda i: self.stack.setCurrentIndex(i))
@@ -185,6 +186,16 @@ class MainWindow(QMainWindow):
         row.addWidget(self.sp_hold)
         row.addStretch(1)
         iv.body.addLayout(row)
+        row = QHBoxLayout()
+        self.sp_cap = make_spin(0, 100000, " CPS", 100)
+        self.sp_cap.setToolTip("Máximo de cliques por segundo que o jogo aceita (0 = desconhecido).")
+        row.addWidget(_muted("Teto do jogo"))
+        row.addWidget(self.sp_cap)
+        row.addStretch(1)
+        iv.body.addLayout(row)
+        self.lbl_cap_hint = _muted("")
+        self.lbl_cap_hint.setWordWrap(True)
+        iv.body.addWidget(self.lbl_cap_hint)
         lay.addWidget(iv)
 
         grid = QGridLayout()
@@ -255,7 +266,7 @@ class MainWindow(QMainWindow):
         lay.addStretch(1)
 
         for spin in (self.sp_h, self.sp_m, self.sp_s, self.sp_ms, self.sp_jitter, self.sp_hold,
-                     self.sp_count, self.sp_delay, self.sp_x, self.sp_y):
+                     self.sp_count, self.sp_delay, self.sp_x, self.sp_y, self.sp_cap):
             spin.valueChanged.connect(self._collect)
         for combo in (self.cb_button, self.cb_type, self.cb_mode):
             combo.currentIndexChanged.connect(self._collect)
@@ -362,6 +373,87 @@ class MainWindow(QMainWindow):
         card.body.addLayout(row)
         return slider, label
 
+    # --------------------------------------------------------- página diagnóstico
+    def _build_diagnostics_page(self) -> QWidget:
+        area, lay = _page("Diagnóstico", "Mede o que o clicker realmente entrega. Compare com o que o jogo registra.")
+
+        live = Card("Último disparo (ao vivo)")
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(28)
+        grid.setVerticalSpacing(10)
+        self.diag: dict[str, QLabel] = {}
+        rows = (
+            ("configured", "CPS configurado"),
+            ("delivered", "CPS realmente entregue"),
+            ("late_avg", "Atraso médio por clique"),
+            ("late_max", "Maior atraso"),
+            ("late_pct", "Cliques com atraso > 1 ms"),
+            ("elapsed", "Duração"),
+        )
+        for i, (key, caption) in enumerate(rows):
+            value = QLabel("—")
+            value.setObjectName("stat")
+            self.diag[key] = value
+            grid.addWidget(_muted(caption), i, 0)
+            grid.addWidget(value, i, 1)
+        grid.setColumnStretch(2, 1)
+        live.body.addLayout(grid)
+        self.lbl_verdict = _muted("Inicie o clicker para ver o diagnóstico.")
+        self.lbl_verdict.setWordWrap(True)
+        live.body.addWidget(self.lbl_verdict)
+        lay.addWidget(live)
+
+        sysc = Card("Otimizações do sistema")
+        self.lbl_opts = QLabel()
+        self.lbl_opts.setTextFormat(Qt.RichText)
+        sysc.body.addWidget(self.lbl_opts)
+        why = _muted(
+            "O Windows 11 pode ignorar o timer de 1 ms e mover apps em segundo plano para núcleos lentos "
+            "quando o jogo está em primeiro plano. Essas opções evitam isso.")
+        why.setWordWrap(True)
+        sysc.body.addWidget(why)
+        lay.addWidget(sysc)
+
+        tips = Card("Como interpretar")
+        tip = _muted(
+            "• Se “entregue” ≈ “configurado” e o jogo registra menos, o limite é do jogo (defina o Teto do jogo).\n"
+            "• Se “entregue” ficar bem abaixo do configurado, o limite é do PC/Windows: feche outros apps pesados.\n"
+            "• Cookie Clicker: descarta cliques com menos de 20 ms entre si, então o máximo é 50 CPS.")
+        tip.setWordWrap(True)
+        tips.body.addWidget(tip)
+        lay.addWidget(tips)
+        lay.addStretch(1)
+        self._refresh_opts()
+        return area
+
+    def _refresh_opts(self) -> None:
+        def mark(ok: bool) -> str:
+            return "<span style='color:#3fb950'>✔</span>" if ok else "<span style='color:#e5484d'>✘</span>"
+        self.lbl_opts.setText(
+            f"{mark(OPT_STATUS['timer_1ms'])} Timer de 1 ms<br>"
+            f"{mark(OPT_STATUS['priority_high'])} Prioridade alta do processo<br>"
+            f"{mark(OPT_STATUS['throttle_off'])} Sem limitação de energia (EcoQoS) em segundo plano")
+
+    def _update_cap_hint(self) -> None:
+        cap = self.sp_cap.value()
+        if cap <= 0:
+            self.lbl_cap_hint.setText("")
+            return
+        interval = self.cfg.interval_ms()
+        needed = 1000 / cap
+        if interval > needed * 1.05:
+            self.lbl_cap_hint.setText(
+                f"⚠ Com {interval:g} ms você entrega ~{1000 / interval:.0f} CPS, abaixo do teto de {cap} CPS. "
+                f"Use ≤ {needed / 2:.0f} ms para aproveitar o teto.")
+        elif interval > needed / 2:
+            self.lbl_cap_hint.setText(
+                f"⚠ Intervalo perto do teto: qualquer atraso faz o jogo descartar cliques. "
+                f"Prefira ≤ {needed / 2:.0f} ms.")
+        else:
+            self.lbl_cap_hint.setText(
+                f"✔ Ótimo: o jogo aceita até {cap} CPS e o excedente é descartado. "
+                f"Intervalos menores só gastam CPU.")
+
     # ------------------------------------------------------------------- bandeja
     def _build_tray(self) -> None:
         self.tray = QSystemTrayIcon(self)
@@ -416,9 +508,11 @@ class MainWindow(QMainWindow):
             self.sp_x.setValue(c["x"])
             self.sp_y.setValue(c["y"])
             self.sp_delay.setValue(c["start_delay_ms"])
+            self.sp_cap.setValue(c["game_cap_cps"])
         finally:
             self._loading = False
         self._sync_enabled()
+        self._update_cap_hint()
 
     def _sync_enabled(self) -> None:
         self.sp_count.setEnabled(self.rb_count.isChecked())
@@ -437,14 +531,16 @@ class MainWindow(QMainWindow):
             repeat_count=self.sp_count.value(),
             position_mode="fixed" if self.rb_fixed.isChecked() else "cursor",
             x=self.sp_x.value(), y=self.sp_y.value(), start_delay_ms=self.sp_delay.value(),
+            game_cap_cps=self.sp_cap.value(),
         )
         self._sync_enabled()
+        self._update_cap_hint()
         self._save_timer.start()
 
     # ------------------------------------------------------------------- perfis
     def _refresh_profiles(self, select: str | None = None) -> None:
         self.cb_profiles.clear()
-        self.cb_profiles.addItems(sorted(self.cfg.profiles))
+        self.cb_profiles.addItems([*BUILTIN_PROFILES, *sorted(self.cfg.profiles)])
         if select:
             self.cb_profiles.setCurrentText(select)
 
@@ -452,6 +548,9 @@ class MainWindow(QMainWindow):
         name, ok = QInputDialog.getText(self, "Salvar perfil", "Nome do perfil:", text=self.cb_profiles.currentText())
         name = name.strip()
         if not ok or not name:
+            return
+        if name in BUILTIN_PROFILES:
+            self._toast("Esse nome é de um perfil pronto; escolha outro")
             return
         self._collect()
         self.cfg.profiles[name] = copy.deepcopy(self.cfg.click)
@@ -461,7 +560,7 @@ class MainWindow(QMainWindow):
 
     def _profile_load(self) -> None:
         name = self.cb_profiles.currentText()
-        profile = self.cfg.profiles.get(name)
+        profile = BUILTIN_PROFILES.get(name) or self.cfg.profiles.get(name)
         if not profile:
             return
         self.cfg.click.update({k: v for k, v in profile.items() if k in self.cfg.click})
@@ -471,6 +570,9 @@ class MainWindow(QMainWindow):
 
     def _profile_delete(self) -> None:
         name = self.cb_profiles.currentText()
+        if name in BUILTIN_PROFILES:
+            self._toast("Perfis prontos (★) não podem ser excluídos")
+            return
         if name in self.cfg.profiles and QMessageBox.question(
             self, "Excluir perfil", f"Excluir o perfil “{name}”?") == QMessageBox.Yes:
             del self.cfg.profiles[name]
@@ -572,6 +674,35 @@ class MainWindow(QMainWindow):
         self._last_count, self._last_time = count, now
         self.lbl_count.setText(f"{count:,}".replace(",", "."))
         self.lbl_cps.setText(f"{cps:.1f}")
+        if self.stack.currentIndex() == 3:
+            self._update_diagnostics()
+
+    def _update_diagnostics(self) -> None:
+        s = self.clicker.snapshot()
+        c = self.cfg.click
+        configured = 1000 / self.cfg.interval_ms() * c["click_type"]
+        self.diag["configured"].setText(f"{configured:.1f} CPS")
+        if s["elapsed"] <= 0.01:
+            return
+        self.diag["delivered"].setText(f"{s['cps'] * c['click_type']:.1f} CPS")
+        self.diag["late_avg"].setText(f"{s['late_avg_ms']:.3f} ms")
+        self.diag["late_max"].setText(f"{s['late_max_ms']:.2f} ms")
+        self.diag["late_pct"].setText(f"{s['late_pct']:.1f} %")
+        self.diag["elapsed"].setText(f"{s['elapsed']:.1f} s")
+        if s["elapsed"] < 1:
+            return
+        delivered = s["cps"] * c["click_type"]
+        ratio = delivered / configured if configured else 1
+        cap = c["game_cap_cps"]
+        if ratio < 0.9:
+            verdict = ("O PC entregou menos que o configurado: o limite é do sistema (timer, CPU ocupada, "
+                       "ou a interface do jogo travando o mouse).")
+        elif cap and delivered > cap:
+            verdict = (f"O clicker entrega {delivered:.0f} CPS; o jogo só aceita {cap}. "
+                       f"O excedente é descartado pelo jogo, não por este app.")
+        else:
+            verdict = "O clicker está entregando o que foi configurado."
+        self.lbl_verdict.setText(verdict)
 
     def _toast(self, text: str, ms: int = 3500) -> None:
         self.lbl_toast.setText(text)
